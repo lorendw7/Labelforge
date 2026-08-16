@@ -1,0 +1,15 @@
+<!--
+  Generic text classification — example of a second task type on the same
+  platform. Copy this file to add new task types; see docs/CUSTOMIZATION.md.
+  Task format: {"data": {"text": "..."}}
+-->
+<View>
+  <Text name="text" value="$text"/>
+  <Choices name="label" toName="text" required="true" choice="single">
+    <Choice value="positive"/>
+    <Choice value="negative"/>
+    <Choice value="neutral"/>
+  </Choices>
+  <Header value="Notes (optional)" size="4"/>
+  <TextArea name="notes" toName="text" rows="2"/>
+</View>

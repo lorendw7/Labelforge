@@ -1,0 +1,52 @@
+# Lab deployment: Label Studio + PostgreSQL.
+# Usage: cp ../.env.example ../.env  (edit secrets)  then:
+#   docker compose --env-file ../.env -f docker-compose.yml up -d
+# Data lives under ./data/ (gitignored). Back it up; see docs/DEPLOYMENT.md.
+
+services:
+  app:
+    image: heartexlabs/label-studio:1.23.0
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_DB: default
+      POSTGRE_NAME: ${POSTGRES_DB:-labelstudio}
+      POSTGRE_USER: ${POSTGRES_USER:-labelstudio}
+      POSTGRE_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRE_HOST: db
+      POSTGRE_PORT: 5432
+      LABEL_STUDIO_HOST: ${LABEL_STUDIO_HOST:-http://localhost:8080}
+      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: ${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
+    volumes:
+      - ../data/label-studio:/label-studio/data
+
+  validator:
+    build: ../services/webhook-validator
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          # Dotted alias: Label Studio's webhook URL validator (Django)
+          # rejects bare single-label hostnames like "validator".
+          - validator.internal
+    ports:
+      - "8090:8090"
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-labelstudio}
+      POSTGRES_USER: ${POSTGRES_USER:-labelstudio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - ../data/postgres:/var/lib/postgresql/data

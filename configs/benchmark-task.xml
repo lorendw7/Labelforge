@@ -1,0 +1,51 @@
+<!--
+  Benchmark task submission form — replaces the legacy xlsx intake.
+  Field names mirror the canonical intake xlsx columns 1:1
+  (see automation/export_to_intake_xlsx.py) so the export converter stays trivial.
+  Import one stub task per expected submission, e.g.:
+    {"data": {"brief": "Submit one benchmark task using the fields below."}}
+-->
+<View>
+  <Header value="Benchmark task submission"/>
+  <Text name="ctx" value="$brief"/>
+
+  <Header value="Title" size="4"/>
+  <TextArea name="title" toName="ctx" required="true" maxSubmissions="1"
+            rows="1" placeholder="Short, unique task title"/>
+
+  <Header value="Domain" size="4"/>
+  <Choices name="domain" toName="ctx" required="true" choice="single">
+    <Choice value="systems"/>
+    <Choice value="data-analysis"/>
+    <Choice value="machine-learning"/>
+    <Choice value="security"/>
+    <Choice value="research"/>
+    <Choice value="other"/>
+  </Choices>
+
+  <Header value="Difficulty" size="4"/>
+  <Choices name="difficulty" toName="ctx" required="true" choice="single">
+    <Choice value="easy"/>
+    <Choice value="medium"/>
+    <Choice value="hard"/>
+  </Choices>
+
+  <Header value="Estimated minutes (expected human time, positive number)" size="4"/>
+  <Number name="estimated_minutes" toName="ctx" required="true" min="1" max="6000"/>
+
+  <Header value="Instruction (self-sufficient problem statement; must not reveal the answer)" size="4"/>
+  <TextArea name="instruction" toName="ctx" required="true" maxSubmissions="1" rows="8"/>
+
+  <Header value="Reference answer" size="4"/>
+  <TextArea name="answer" toName="ctx" required="true" maxSubmissions="1" rows="6"/>
+
+  <Header value="Grading method" size="4"/>
+  <Choices name="grading_method" toName="ctx" required="true" choice="single">
+    <Choice value="deterministic"/>
+    <Choice value="llm-judge"/>
+  </Choices>
+
+  <Header value="Data files (optional; one relative path per line)" size="4"/>
+  <TextArea name="data_files" toName="ctx" maxSubmissions="1" rows="3"
+            placeholder="input.log&#10;dataset/train.csv"/>
+</View>

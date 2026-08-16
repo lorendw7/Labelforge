@@ -1,0 +1,21 @@
+# secrets — never commit
+.env
+
+# runtime data — annotation data and databases never enter this repo
+data/
+exports/
+backups/
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+
+# os
+.DS_Store
+Thumbs.db
