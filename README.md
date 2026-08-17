@@ -46,7 +46,8 @@ configs/           one labeling config XML per task type
 automation/        Python scripts against the Label Studio API
 services/
   webhook-validator/  FastAPI webhook: validates benchmark submissions on save
-docs/              deployment and customization guides + development roadmap
+docs/              deployment and customization guides, annotator one-pager,
+                   development roadmap
 ```
 
 ## Quickstart
@@ -73,13 +74,18 @@ Export benchmark submissions to the canonical intake xlsx:
 python automation/export_to_intake_xlsx.py --project <id> -o submissions.xlsx
 ```
 
+Multi-annotator studies (one project per annotator, progress monitoring,
+lossless export of every judgment) are the next build step — see
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Documentation
 
 | Document | What it covers |
 |---|---|
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | First deployment, owner-account bootstrap, API tokens (incl. the legacy-token pitfall), backups, upgrades, webhook validator ops, security notes |
 | [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) | The four extension layers: labeling configs (form-style vs item-style, validation, `visibleWhen`), REST automation, webhooks, ML backends — plus the benchmark pipeline and the dual-annotation study pattern |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Development roadmap (M1–M5): dual-annotation export, multi-project provisioning, progress monitoring, annotator onboarding, end-to-end dry run |
+| [docs/ANNOTATOR_QUICKSTART.md](docs/ANNOTATOR_QUICKSTART.md) | One-page annotator handout **template** — log in, open your project, label an item, report a problem. Each study ships a filled copy with its own screenshots |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Build plan, written to be implemented by hand: house rules for `automation/` scripts, then M1–M5 (dual-annotation export, multi-project provisioning, progress monitoring, onboarding, dry-run gate) and M6–M12 for running a shared instance (identity in exports, adjudication, automated backups, health alerts, remote access, wider field support, CI) |
 
 ## Data safety
 

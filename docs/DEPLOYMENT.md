@@ -50,6 +50,53 @@ Then:
 2. Invite annotators via **Organization → Add people** (invite link) — no need to reopen signup.
 3. Create projects per task type — see [CUSTOMIZATION.md](CUSTOMIZATION.md).
 
+## Onboarding annotators
+
+The bar to hold: **a new annotator needs a browser and an invite link, nothing else.** What that takes on the deployment side:
+
+1. **One stable URL everyone can reach.** `LABEL_STUDIO_HOST` is what lands in invite links and bookmarks, so fix the address before handing it out (see the desktop-machine notes above). If annotators are off-network, they reach it over the lab VPN — test that from an actual off-network machine, not from the server.
+2. **Accounts by invite only.** **Organization → Add people** generates the invite link; signup stays closed (`LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true`). Never reopen public signup to add people.
+3. **Everyone logs in once *before* the kickoff session.** This is the single highest-value step: password resets, VPN gaps and "I see no projects" all surface here, days ahead of labeling, instead of eating the first hour of a session with everyone waiting.
+4. **Give them the one-pager, not the tool.** Copy [ANNOTATOR_QUICKSTART.md](ANNOTATOR_QUICKSTART.md) into the study's guideline packet, fill in its placeholders, add screenshots of that study's actual form, and walk through it live at kickoff.
+5. **Turn the nightly backup on for the whole production window** (next section), and copy the dumps off the machine. Annotation time is the one thing a restore cannot recreate.
+
+Note on roles: the community edition has no per-user task assignment. A study that needs "these items for this person" gives each annotator their own project — see [CUSTOMIZATION.md § Verification / dual-annotation studies](CUSTOMIZATION.md#verification--dual-annotation-studies), and [ROADMAP.md](ROADMAP.md) M2 for the provisioning script that will make standing those projects up one command. Members are organization-wide, so anyone with an account can open any project; blinding comes from what you import, never from permissions.
+
+## Administering the instance remotely
+
+Only the first deployment needs someone at the machine's own keyboard. Everything after — updates, logs, backups — is done over SSH. On the server:
+
+```bash
+sudo apt-get install -y openssh-server && sudo systemctl enable --now ssh
+sudo ufw allow 22/tcp    # if ufw is active; without this the connection times out
+```
+
+From a workstation on the same network, `ssh <user>@<server-ip>`. Give it an alias in `~/.ssh/config` so the address lives in one place:
+
+```text
+Host labelforge
+    HostName <server-ip>
+    User <user>
+```
+
+Two things that bite here:
+
+- **`docker` group membership only applies to a fresh login.** After `usermod -aG docker <user>`, an already-open session (and every new SSH session started before logging out) still gets `permission denied ... /var/run/docker.sock`. Disconnect and reconnect once. Don't paper over it with `sudo docker` — that leaves `data/` owned by root and breaks the backups later.
+- **Off-network access needs a VPN, not an open port.** A campus network won't give you port forwarding, and the instance should not be on the public internet anyway (see Security notes). The lab VPN, or a mesh VPN like Tailscale/ZeroTier on the server plus each annotator's machine, keeps the deployment unchanged — only `LABEL_STUDIO_HOST` changes, to whatever address everyone will actually use.
+
+## Updating the deployment
+
+Labeling configs, automation scripts and compose changes all ship through git, so an update is a pull and a restart:
+
+```bash
+cd <repo> && git pull
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
+```
+
+`up -d` recreates only the containers whose configuration actually changed, and `.env` and `data/` are gitignored — a pull never touches secrets or annotations. After editing `.env` alone, `up -d app` is enough; it recreates just the app container, which costs the ~1 minute Label Studio needs to boot (a browser hitting it during that window sees a connection reset — wait, don't re-run the command).
+
+Version bumps of the Label Studio image itself are deliberate and go through the repo the same way — see [Upgrades](#upgrades) below.
+
 ## Data locations & backup
 
 Everything lives under `./data/` (gitignored, never committed):
