@@ -5,6 +5,8 @@
 - A lab server with Docker Engine + Docker Compose v2 (Linux recommended; 2 CPU / 4 GB RAM is enough to start).
 - A hostname or fixed IP annotators can reach, e.g. `http://lab-server:8080`.
 
+A repurposed desktop machine qualifies — see [When the "server" is a desktop machine](#when-the-server-is-a-desktop-machine) for the two defaults to change first.
+
 **Local development** (Windows/macOS with Docker Desktop) uses the identical commands with the default `LABEL_STUDIO_HOST=http://localhost:8080` — this is the recommended way to iterate on labeling configs and automation scripts before touching the lab instance. A local `data/` directory then holds a real (throwaway) database; it is gitignored like everything runtime.
 
 ## First deployment
@@ -14,6 +16,24 @@ git clone <this-repo> && cd labelforge
 cp .env.example .env
 # edit .env: set POSTGRES_PASSWORD, set LABEL_STUDIO_HOST to the URL annotators will use
 docker compose --env-file .env -f deploy/docker-compose.yml up -d
+```
+
+### When the "server" is a desktop machine
+
+A spare desktop under someone's desk works fine, but two of its defaults break an instance annotators depend on.
+
+**It suspends when idle.** A desktop Ubuntu install sleeps after a while with nobody at the keyboard, and a sleeping machine is indistinguishable from a down one. Disable the sleep targets, and turn off automatic suspend in **Settings → Power** as well (the GNOME setting and the systemd targets are separate switches):
+
+```bash
+sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+```
+
+**Its IP moves.** `LABEL_STUDIO_HOST` is baked into invite links and annotators' bookmarks, so a DHCP lease change silently breaks both. Give the machine a DHCP reservation or a static address before handing the URL out. Find the current one with `hostname -I`.
+
+Also confirm Docker itself starts at boot — the containers are `restart: unless-stopped`, which only helps if the daemon is up:
+
+```bash
+sudo systemctl enable --now docker
 ```
 
 ### Bootstrapping the first (owner) account
