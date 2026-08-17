@@ -16,6 +16,10 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# editor / local tooling
+.claude/
+.vscode/
+
 # os
 .DS_Store
 Thumbs.db
