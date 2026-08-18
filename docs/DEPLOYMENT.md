@@ -7,7 +7,7 @@
 
 A repurposed desktop machine qualifies — see [When the "server" is a desktop machine](#when-the-server-is-a-desktop-machine) for the two defaults to change first.
 
-**Local development** (Windows/macOS with Docker Desktop) uses the identical commands with the default `LABEL_STUDIO_HOST=http://localhost:8080` — this is the recommended way to iterate on labeling configs and automation scripts before touching the lab instance. A local `data/` directory then holds a real (throwaway) database; it is gitignored like everything runtime.
+**Running it on your own machine** (Windows/macOS with Docker Desktop) uses the identical commands with the default `LABEL_STUDIO_HOST=http://localhost:8080` — the recommended way to iterate on labeling configs and automation scripts before touching the instance annotators depend on. See [A local instance on your own machine](#a-local-instance-on-your-own-machine).
 
 ## First deployment
 
@@ -36,9 +36,28 @@ Also confirm Docker itself starts at boot — the containers are `restart: unles
 sudo systemctl enable --now docker
 ```
 
+### A local instance on your own machine
+
+A second instance on a laptop or personal desktop needs no configuration changes at all: `.env.example` already defaults `LABEL_STUDIO_HOST` to `http://localhost:8080`, so the commands above run unmodified on Windows and macOS with Docker Desktop. Four things are worth knowing before you start.
+
+**It is an empty database, not a copy of the lab.** Projects, tasks and annotations live in `data/postgres`, which git never carries — a local instance starts with nothing in it, and work done locally stays local. To develop against real data, restore a dump from the lab (see [Data locations & backup](#data-locations--backup)); a `git pull` will never bring it.
+
+**Invite links are useless locally.** `LABEL_STUDIO_HOST=http://localhost:8080` resolves only on the machine running it, so any link the instance hands out points nowhere for anyone else. Treat a local instance as single-user; multi-annotator studies belong on the shared deployment.
+
+**Leave the `data/postgres` bind mount alone on Windows.** Postgres refuses a data directory it cannot `chmod` to 0700, which is the usual reason a bind-mounted database fails on a Windows host — and the usual reaction is to swap the mount for a named volume. Don't: Docker Desktop's current file sharing handles it, and `postgres:15-alpine` initialises `../data/postgres` cleanly and comes up healthy. Keeping the bind mount is what makes `data/` mean the same thing on every machine, so the backup commands in this guide work unchanged.
+
+**Docker Desktop has to be running before the containers can be.** `restart: unless-stopped` brings the stack back after a reboot, but only once the daemon is up, and Docker Desktop does not start itself unless you enable **Settings → General → Start Docker Desktop when you sign in to your computer**. Without that, every reboot silently leaves the stack down.
+
+Then bootstrap the owner account as below. Finally, note that the `automation/` scripts read `LABEL_STUDIO_URL` and `LABEL_STUDIO_API_KEY` from the environment and never load `.env` themselves, so export them into the session before running one. In PowerShell:
+
+```powershell
+$env:LABEL_STUDIO_URL = "http://localhost:8080"
+$env:LABEL_STUDIO_API_KEY = "<legacy token>"
+```
+
 ### Bootstrapping the first (owner) account
 
-The first account to register becomes the instance owner, but signup is invite-only by default (`LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true`) — so on a fresh deployment the signup page is closed and nobody can create that first account. Open it briefly:
+The first account to register becomes the instance owner, but signup is invite-only by default (`LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true`) — so on a fresh deployment nobody can create that first account. The symptom is confusing rather than obvious: `/user/signup` still renders a normal form — the GET is never gated — and submitting it returns 403, because the check demands an invite token matching an organization that does not exist yet. Open signup briefly instead:
 
 1. In `.env`, set `LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false`, then `docker compose --env-file .env -f deploy/docker-compose.yml up -d app` (recreates only the app container).
 2. Open `LABEL_STUDIO_HOST` in a browser and sign up — this account is the owner.
@@ -46,7 +65,7 @@ The first account to register becomes the instance owner, but signup is invite-o
 
 Then:
 
-1. **Account & Settings → Access Token** — generate the API token used by `automation/` scripts. The scripts authenticate with `Authorization: Token …`, which requires a **legacy token**; if your instance only shows a long JWT personal access token, enable legacy tokens under **Organization → API Tokens Settings** first.
+1. **Account & Settings → Access Token** — generate the API token used by `automation/` scripts. The scripts authenticate with `Authorization: Token …`, which requires a **legacy token** (a 40-character hex string), and a fresh instance has legacy tokens turned off — enable them under **Organization → API Tokens Settings** first. Do not substitute the long `eyJ…` JWT personal access token offered by default: it is a *refresh* token, rejected with 401 under both `Token` and `Bearer` until it is exchanged at `/api/token/refresh` for a short-lived access token. Every automation script failing with 401 on a token you just copied is this, not a typo.
 2. Invite annotators via **Organization → Add people** (invite link) — no need to reopen signup.
 3. Create projects per task type — see [CUSTOMIZATION.md](CUSTOMIZATION.md).
 
