@@ -306,14 +306,62 @@ upgrade from quietly changing an export.
 *Done when:* `python -m pytest automation/tests` passes locally and in CI on
 every push.
 
+### M13 — idempotent import by data key
+
+`register_webhook.py` is idempotent, and M2 makes provisioning idempotent *by
+project title* — which protects the project but says nothing about what is
+inside it. Import the same batch twice and every item exists twice. That is not
+a cosmetic problem: a duplicated task splits one item in two, so the pair of
+independent judgments a study is counting becomes one annotator judging the same
+item twice. It corrupts agreement statistics without corrupting anything you can
+see in the UI. Any study that imports its corpus in waves rather than one batch,
+or whose first import died halfway, meets this on an ordinary Tuesday.
+
+The fix is a **declared identity key** on the import path (`--key item_id`):
+before creating anything, sweep the project once for the existing values of that
+key in each task's `data`, and skip the incoming tasks that already have one.
+The sweep belongs in `ls_api.py` next to the project-listing helper, so
+provisioning and any later re-import inherit the same behaviour.
+
+**Decisions worth getting right.**
+
+- **The key is declared, not guessed.** Studies name their identity column
+  differently, and defaulting to one is how an import ends up silently
+  non-idempotent. Requiring the flag is the honest interface. An incoming task
+  that lacks the key is an error, not a skip — the batch and the key disagree,
+  and importing it creates a task nobody can match later.
+- **Duplicates inside the incoming batch are an error too**, caught before the
+  first task is created — validate everything before mutating anything.
+- **One paged sweep, compared in memory.** Per-task lookups turn a 2,000-item
+  import into 2,000 requests. Task listing is paginated, and the response shape
+  differs across releases in the same way project listing does, which is the
+  argument for putting it behind an `ls_api` helper once.
+- **Exact string comparison, no normalisation.** A study whose ids need
+  normalising should normalise them when it writes the batch. A matcher that
+  quietly folds case or trims punctuation is one nobody can predict.
+- **Skip, never update or delete.** Idempotent means safe to re-run, not
+  synchronised. Overwriting a task that already carries annotations is how a
+  study loses judgments, and no flag on an import script should be able to do
+  it. A study that genuinely needs to correct imported data does it as a new
+  batch with new ids.
+- Print the usual honest summary line — `imported N, skipped M already present`
+  — because "nothing happened" and "everything was already there" look identical
+  otherwise.
+
+*Done when:* re-running a completed import creates nothing and reports every
+task as skipped, a partly-overlapping second wave imports only the new items,
+and a batch with a missing or duplicated key fails before the first task is
+created.
+
 ## Ordering
 
 M1 and M3 are independent and can start any time. M2 must precede the first
 study's import; M4 precedes its kickoff session; M5 gates production labeling.
 After that: M8 and M9 before the instance carries anyone else's work, M10 as
 soon as an annotator is off-network, M6/M7 when the first study reaches
-analysis, M11 when a new task type needs it, M12 whenever you want the earlier
-milestones to stay correct.
+analysis, M11 when a new task type needs it, M13 as soon as a study imports in
+waves rather than in one batch, M12 whenever you want the earlier milestones to
+stay correct.
 
 ## Non-goals (standing)
 
