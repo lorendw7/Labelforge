@@ -24,18 +24,6 @@ services:
     volumes:
       - ../data/label-studio:/label-studio/data
 
-  validator:
-    build: ../services/webhook-validator
-    restart: unless-stopped
-    networks:
-      default:
-        aliases:
-          # Dotted alias: Label Studio's webhook URL validator (Django)
-          # rejects bare single-label hostnames like "validator".
-          - validator.internal
-    ports:
-      - "8090:8090"
-
   db:
     image: postgres:15-alpine
     restart: unless-stopped

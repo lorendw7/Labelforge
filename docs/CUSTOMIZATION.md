@@ -2,21 +2,21 @@
 
 The platform is customized only through Label Studio's supported extension points — never by forking it (the deployed image stays stock `heartexlabs/label-studio`, pinned in `deploy/docker-compose.yml`). Four layers, in order of preference:
 
-| Layer | When to use | Where it lives here |
+| Layer | When to use | Status |
 |---|---|---|
-| 1. Labeling config (XML) | New task type, new form fields, different UI | `configs/*.xml` |
-| 2. REST automation | Project setup, bulk import, export into downstream pipelines | `automation/` |
-| 3. Webhooks | React to submissions in real time (validation, notifications) | `services/webhook-validator/` |
-| 4. ML backend | Model-assisted pre-annotation for a task type | (add under `services/` when needed) |
+| 1. Labeling config (XML) | New task type, new form fields, different UI | **Built** — `configs/*.xml` |
+| 2. REST automation | Project setup, bulk import, export into downstream pipelines | Planned — ROADMAP M0-M3 |
+| 3. Webhooks | React to submissions in real time (validation, notifications) | Planned — ROADMAP M15 |
+| 4. ML backend | Model-assisted pre-annotation for a task type | Not planned; add under `services/` if a task type ever justifies it |
 
-Start at layer 1 and only move down when the layer above can't do the job. Most "customization" is just an XML file.
+Start at layer 1 and only move down when the layer above can't do the job. Most "customization" is just an XML file — which is why layer 1 is the only layer built so far, and why a study can run end to end through the UI without the rest.
 
 ## Layer 1 — labeling configs
 
 A labeling config is one `<View>` XML document that defines a task type's entire UI. The two committed configs are the worked examples, one per project shape:
 
 - **Item-style** (`text-classification.xml`): one task per datum. The task JSON's `data` object provides variables — `{"data": {"text": "..."}}` renders through `<Text name="text" value="$text"/>` — and control tags attach to it via `toName`.
-- **Form-style** (`benchmark-task.xml`): the annotator *is* the data source. Import N identical stub tasks (`create_project.py --stub-tasks N`); each submission fills one stub. Everything is a control tag; the only `data` field is a one-line brief.
+- **Form-style** (`benchmark-task.xml`): the annotator *is* the data source. Import N identical stub tasks — a JSON list of N copies of `{"data": {"brief": "…"}}` — and each submission fills one stub. Everything is a control tag; the only `data` field is a one-line brief.
 
 Rules that keep configs working:
 
@@ -29,49 +29,48 @@ Workflow for a new task type:
 
 1. Copy the closest committed config (or start from a built-in template: Projects → New → Browse Templates, then take the XML) into `configs/<task-type>.xml`.
 2. Iterate in the UI: project Settings → Labeling Interface shows a live preview with sample data. When it behaves, save the XML back to the file and commit — **the file in `configs/` is the source of truth**, not whatever a project happens to contain.
-3. Create the real project from the file:
-   ```bash
-   python automation/create_project.py --title "My task" --config configs/<task-type>.xml [--stub-tasks 50]
-   ```
-4. Import tasks (UI, or `POST /api/projects/<id>/import` for bulk), annotate, export.
+3. Create the real project: **Projects → Create**, then paste the file's contents into **Settings → Labeling Interface → Code**. (ROADMAP M0 replaces this step with one command; until then the paste *is* the step, and `configs/` stays the source of truth for what you paste.)
+4. Import tasks — drop a JSON file on the project's **Import** page, or `POST /api/projects/<id>/import` for bulk — then annotate and export.
 
 **Changing a config after annotation has started is a migration, not an edit.** Renaming or deleting a control tag orphans the existing results silently. Export first; prefer adding new fields over renaming; if a rename is unavoidable, treat pre- and post-change exports as two schema versions in the converter.
 
-## Layer 2 — REST automation
+## Layer 2 — REST automation (planned)
 
-`automation/ls_api.py` is the shared plumbing: plain REST rather than the Python SDK (the REST API is stable across releases; the SDK churns), credentials strictly from `LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY`, and error responses surfaced with their bodies (Label Studio puts field-level details there — without this, every failure is an opaque 400).
+Nothing is built here yet; the UI carries a single project fine. The layer earns its existence at the point where a study needs one project *per annotator* — provisioning ten of those by hand is ten chances to import the wrong batch into the wrong project.
 
-Its `annotation_fields()` flattens an annotation's `result` list into `{field_name: value}` and understands the three control-tag families the committed configs use — TextArea (`text`, joined), Choices (`choices[0]`), Number (`number`). **If a new config introduces another control tag (Labels, Rating, Taxonomy…), extend `annotation_fields()` in the same style first**; every converter downstream gets the support for free.
+The design is settled even though the code is not, and it is worth reading before the first script, because two of these are expensive to reverse once converters depend on them:
 
-Downstream converters follow the `export_to_intake_xlsx.py` pattern: fetch the project's JSON export, flatten each task's **latest non-cancelled annotation** (tasks without annotations are skipped and counted), write the exact format the consumer expects (for benchmark tasks, the canonical intake xlsx). One converter per downstream pipeline, in `automation/`, no shared state beyond `ls_api.py`. Note the one-annotation-per-task assumption: it fits form-style intake, but a dual-annotation study exports *all* annotations per item — its converter must not reuse this latest-wins logic.
+- **One module talks HTTP, nothing else does.** Plain REST rather than the Python SDK — the REST API is stable across releases and the SDK churns. Credentials come from `LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY` only, never a flag and never a file. Surface error bodies: Label Studio puts the field-level reason there, and without it every failure looks like an opaque 400.
+- **One shared flattener.** An annotation's `result` list becomes `{field_name: value}` in exactly one function, covering the control-tag families the configs actually use — TextArea (`text`, joined), Choices (`choices[0]`), Number (`number`). A new control tag (Labels, Rating, Taxonomy…) is then extended in one place and every converter inherits it.
+- **Latest-wins is a trap outside form-style intake.** Flattening the latest non-cancelled annotation per task is right for benchmark submissions and *wrong* for dual annotation, where the second judgment is the entire point. A verification study's converter must emit one row per annotation.
 
-## Layer 3 — webhooks
+Milestones with interfaces and traps: [ROADMAP.md](ROADMAP.md) M0 for the foundation, M1 for the dual-annotation exporter, M2 for provisioning, M3 for progress.
 
-For per-submission side effects — instant shallow validation, notifications. The shipped example is `services/webhook-validator/` (FastAPI, wired into the compose stack), registered per project (idempotent; subscribes to `ANNOTATION_CREATED` / `ANNOTATION_UPDATED` only):
+## Layer 3 — webhooks (planned)
 
-```bash
-python automation/register_webhook.py --project <id>
-```
+For per-submission side effects — instant shallow validation, notifications. Not deployed; ROADMAP M15 carries the milestone. Three findings from an earlier prototype, kept here because each cost an afternoon to learn:
 
-Two things to know:
-
-- Inside the compose network the validator is reachable as `validator.internal:8090` — the dotted alias exists because Label Studio's webhook URL validation (Django) rejects bare single-label hostnames like `validator`.
-- A webhook validator re-implements only *shallow* rules for instant feedback and is intentionally **not** the source of truth — deep validation belongs downstream, in whatever pipeline consumes the export. Keep it that way for any new webhook; duplicated deep logic drifts.
+- **Label Studio rejects bare single-label hostnames in webhook URLs.** A service reachable inside the compose network as `validator` will not register — Django's URL validation refuses it. Give the container a dotted network alias (`validator.internal`) and register that.
+- **A validator is the shallow gate, never the source of truth.** Deep validation belongs downstream, in whatever consumes the export. Duplicated deep logic drifts, and the copy living in the webhook is the one nobody remembers to update.
+- **Most of what a validator would catch, layer 1 already prevents.** With `required="true"` and enum `<Choices>` on every field, a submission made *through the UI* is clean by construction; the validator's real job is catching what arrives through the API, bypassing the form. Expect its log to read `clean` almost always — that is the design working, not the webhook failing to fire.
 
 ## Layer 4 — ML backends
 
-None deployed. If a task type would genuinely benefit from pre-annotation, add the backend as a service under `services/` and connect it per project (Settings → Model). Two constraints: pin the model like any other dependency, and **never attach a backend to a verification-style study** (below) — its value is that no model influenced the verdicts.
+None deployed, and none planned. If a task type would genuinely benefit from pre-annotation, add the backend as a service under `services/` and connect it per project (Settings → Model). Two constraints: pin the model like any other dependency, and **never attach a backend to a verification-style study** (below) — its value is that no model influenced the verdicts.
 
-## The benchmark-task pipeline (the customized part today)
+## The benchmark-task pipeline
 
-`configs/benchmark-task.xml` replaces the lab's legacy xlsx intake form for benchmark task submissions. Field names mirror the intake-xlsx columns exactly, which is what keeps the export converter trivial:
+`configs/benchmark-task.xml` replaces the lab's legacy xlsx intake form for benchmark task submissions. Its field names mirror the intake-xlsx column names 1:1 — that is not cosmetic, it is what will keep the eventual converter a rename-free pass-through:
 
 ```
-annotator fills form ──▶ webhook validator (instant shallow checks, logs issues)
-                    └──▶ export_to_intake_xlsx.py ──▶ submissions.xlsx (canonical intake format)
+annotator fills form ──▶ Label Studio project ──▶ export ──▶ intake xlsx
+                         (validation lives in                (converter: ROADMAP M16)
+                          the config itself)
 ```
 
-- The **webhook validator** re-implements only the shallow field rules (required, positive minutes, grading enum) for instant feedback.
+Today the export step is the UI's **Export → CSV**, hand-shaped into the intake sheet. The converter that makes it one command is ROADMAP M16.
+
+- **The config is the validator.** `required="true"`, `<Number min="1" max="6000">` and enum `<Choices>` mean the xlsx-era failure modes — free-text numbers, invalid enums, wrong headers — cannot be produced through the form at all. That is why no webhook is needed to ship this task type.
 - Deep QA (data-file existence, packing, answer isolation, oracle verification) is deliberately **not** the platform's job — whatever consumes the xlsx owns deep validation; the platform's job ends at a clean export.
 
 ## Verification / dual-annotation studies (pattern)
@@ -94,5 +93,5 @@ The image is pinned (`heartexlabs/label-studio:1.23.0`). Upgrading is a delibera
 
 - One XML file per task type in `configs/`, English field names, snake_case, a header comment stating the expected task JSON.
 - `configs/` is the source of truth for project UIs; the UI preview is a scratchpad.
-- Scripts read credentials from `LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY` env vars only.
+- Scripts, when they exist, read credentials from `LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY` env vars only — never a flag, never a file.
 - No annotation data in this repo — exports go to gitignored paths (`exports/`, `*.xlsx`); `data/` (Label Studio media + PostgreSQL) is gitignored and backed up out of band.

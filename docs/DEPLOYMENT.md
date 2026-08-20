@@ -48,7 +48,7 @@ A second instance on a laptop or personal desktop needs no configuration changes
 
 **Docker Desktop has to be running before the containers can be.** `restart: unless-stopped` brings the stack back after a reboot, but only once the daemon is up, and Docker Desktop does not start itself unless you enable **Settings → General → Start Docker Desktop when you sign in to your computer**. Without that, every reboot silently leaves the stack down.
 
-Then bootstrap the owner account as below. Finally, note that the `automation/` scripts read `LABEL_STUDIO_URL` and `LABEL_STUDIO_API_KEY` from the environment and never load `.env` themselves, so export them into the session before running one. In PowerShell:
+Then bootstrap the owner account as below. Everything after that — projects, imports, exports — is UI work today; the automation layer that would script it is ROADMAP M0 onwards. When those scripts exist they will read `LABEL_STUDIO_URL` and `LABEL_STUDIO_API_KEY` from the environment and will not load `.env` themselves, so a local session will start with:
 
 ```powershell
 $env:LABEL_STUDIO_URL = "http://localhost:8080"
@@ -65,7 +65,7 @@ The first account to register becomes the instance owner, but signup is invite-o
 
 Then:
 
-1. **Account & Settings → Access Token** — generate the API token used by `automation/` scripts. The scripts authenticate with `Authorization: Token …`, which requires a **legacy token** (a 40-character hex string), and a fresh instance has legacy tokens turned off — enable them under **Organization → API Tokens Settings** first. Do not substitute the long `eyJ…` JWT personal access token offered by default: it is a *refresh* token, rejected with 401 under both `Token` and `Bearer` until it is exchanged at `/api/token/refresh` for a short-lived access token. Every automation script failing with 401 on a token you just copied is this, not a typo.
+1. **Account & Settings → Access Token** — generate an API token if you intend to talk to the REST API at all (bulk import, scripted export, and everything the roadmap's automation layer will do). Two traps, in the order you meet them. A fresh instance has **legacy tokens turned off**; enable them under **Organization → API Tokens Settings**, because `Authorization: Token …` — the scheme the roadmap's scripts assume — only accepts a legacy token, a 40-character hex string. And do not substitute the long `eyJ…` JWT personal access token offered by default: it is a *refresh* token, rejected with 401 under **both** `Token` and `Bearer` until it is exchanged at `/api/token/refresh` for a short-lived access token. A 401 on a token you just copied is almost always this, not a typo.
 2. Invite annotators via **Organization → Add people** (invite link) — no need to reopen signup.
 3. Create projects per task type — see [CUSTOMIZATION.md](CUSTOMIZATION.md).
 
@@ -79,7 +79,7 @@ The bar to hold: **a new annotator needs a browser and an invite link, nothing e
 4. **Give them the one-pager, not the tool.** Copy [ANNOTATOR_QUICKSTART.md](ANNOTATOR_QUICKSTART.md) into the study's guideline packet, fill in its placeholders, add screenshots of that study's actual form, and walk through it live at kickoff.
 5. **Turn the nightly backup on for the whole production window** (next section), and copy the dumps off the machine. Annotation time is the one thing a restore cannot recreate.
 
-Note on roles: the community edition has no per-user task assignment. A study that needs "these items for this person" gives each annotator their own project — see [CUSTOMIZATION.md § Verification / dual-annotation studies](CUSTOMIZATION.md#verification--dual-annotation-studies), and [ROADMAP.md](ROADMAP.md) M2 for the provisioning script that will make standing those projects up one command. Members are organization-wide, so anyone with an account can open any project; blinding comes from what you import, never from permissions.
+Note on roles: the community edition has no per-user task assignment. A study that needs "these items for this person" gives each annotator their own project — see [CUSTOMIZATION.md § Verification / dual-annotation studies](CUSTOMIZATION.md#verification--dual-annotation-studies-pattern), and [ROADMAP.md](ROADMAP.md) M2 for the provisioning script that will make standing those projects up one command. Members are organization-wide, so anyone with an account can open any project; blinding comes from what you import, never from permissions.
 
 ## Administering the instance remotely
 
@@ -145,25 +145,6 @@ The image is pinned (`heartexlabs/label-studio:1.23.0`) so upgrades are delibera
 1. Take a backup (above).
 2. Bump the tag in `deploy/docker-compose.yml`, commit.
 3. `docker compose --env-file .env -f deploy/docker-compose.yml up -d` — migrations run automatically on start.
-
-## Webhook validator (optional, benchmark projects)
-
-The validator ships as a compose service (`validator`) and starts with the stack. Register it on a benchmark project via the API (idempotent — re-running skips an already-registered URL; it subscribes to `ANNOTATION_CREATED` / `ANNOTATION_UPDATED` only):
-
-```bash
-python automation/register_webhook.py --project <id>
-```
-
-The default URL `http://validator.internal:8090/webhook` works because Label Studio reaches the validator over the compose network. The dotted alias (declared in `deploy/docker-compose.yml`) is deliberate: Label Studio's URL validation rejects bare container hostnames like `validator`. Health check from the host: `curl http://localhost:8090/healthz`. Validation results appear in `docker compose --env-file .env -f deploy/docker-compose.yml logs -f validator`.
-
-To run it standalone instead (e.g. local development):
-
-```bash
-cd services/webhook-validator
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8090
-# then register with --url http://<host>:8090/webhook
-```
 
 ## Security notes
 

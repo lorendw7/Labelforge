@@ -3,8 +3,17 @@
 What the platform needs next, in build order, written to be **implemented by
 hand**: each milestone states why it exists, the interface it should expose,
 the decisions worth getting right the first time, the traps, and a "done when"
-you can actually check. No code here — code lands in `automation/`,
-`services/` and `deploy/`.
+you can actually check.
+
+**Where this stands today.** The repository ships the deployment (`deploy/`)
+and the labeling configs (`configs/`). There is no Python in it. A study can
+already run end to end through the Label Studio UI — create project, paste
+config, import a JSON file, label, export — and for a *single* project that is
+genuinely enough; do not build automation to avoid a UI click. Each milestone
+below buys back something the UI makes either impossible (exporting *both*
+judgments per item) or unreliable at scale (ten annotators, ten manual
+imports, one wrong batch). Code lands in `automation/` and `services/`, which
+M0 and M15 create.
 
 The scope rule comes first: this repo only gains **generic** capability.
 Anything study-specific — the labeling config, who judges what, the judgments
@@ -17,20 +26,23 @@ M6+ is what multi-person operation needs once that first study has run.
 
 ## House rules for anything in `automation/`
 
-Learn these once and every milestone below gets shorter. They are what the
-existing four scripts already do:
+Learn these once and every milestone below gets shorter. Nothing implements
+them yet, so they are not a description — they are the precedent M0 sets and
+every later script copies. That cuts both ways: a shortcut taken in the first
+script is inherited by all of them.
 
 - **One concern per script, `ls_api.py` for the plumbing.** Credentials come
   from `LABEL_STUDIO_URL` / `LABEL_STUDIO_API_KEY` only — never a flag, never a
   file. New shared helpers (project listing, user lookup) belong in `ls_api.py`
   so the next script inherits them.
 - **Plain REST, not the Python SDK.** The REST API is stable across releases;
-  the SDK churns. Keep surfacing error bodies the way `_check()` does — Label
-  Studio puts the field-level reason in the body, and without it every failure
-  looks like an opaque 400.
-- **Idempotent, or it will be re-run and duplicate something.** `register_webhook.py`
-  is the pattern: look for what you are about to create, skip and say so if it
-  is there. A provisioning run that dies halfway must be safe to repeat.
+  the SDK churns. Put every response through one checker that raises with the
+  response **body** attached — Label Studio puts the field-level reason there,
+  and without it every failure looks like an opaque 400.
+- **Idempotent, or it will be re-run and duplicate something.** Look for what
+  you are about to create; if it is already there, skip it and say which
+  existing thing it matched. A provisioning run that dies halfway must be safe
+  to repeat — and it will die halfway eventually.
 - **Validate everything before mutating anything.** Read all input files, check
   all paths, then start creating. A manifest that is wrong about its tenth
   project must not leave nine projects behind.
@@ -43,16 +55,62 @@ existing four scripts already do:
 - **Never write annotation data into the repo.** Exports go to gitignored paths
   (`exports/`, `*.xlsx`).
 
+## M0 — the automation foundation (`automation/`)
+
+**Why.** M1, M2 and M3 each assume two things that do not exist: a module that
+knows how to talk to the instance, and a way to create a project from a
+committed config without pasting XML into a browser. Build them once, first.
+The alternative — letting whichever milestone gets written first grow its own
+plumbing — produces a module shaped by a single caller, which the second caller
+then works around instead of extending.
+
+**Interface.**
+
+```bash
+python automation/create_project.py --title "Benchmark task intake" \
+    --config configs/benchmark-task.xml --stub-tasks 50
+```
+
+`ls_api.py` is the shared plumbing and holds four things, no more: credentials
+and base URL from the environment, `get`/`post` wrapped in the body-preserving
+error check, the `result`-list flattener, and a project lister that copes with
+pagination.
+
+**Decisions worth getting right.**
+
+- **The flattener is the load-bearing part**, not the HTTP. It turns an
+  annotation's `result` list into `{field_name: value}` for TextArea (`text`,
+  joined), Choices (`choices[0]`) and Number (`number`) — the three families
+  the committed configs use. Every exporter downstream depends on it, so it is
+  a pure function over dicts and it gets a fixture test on day one (M11 widens
+  it, M12 puts it in CI).
+- **Project listing is paginated on some releases and a bare list on others.**
+  Discover that once, hide it in the helper, and no later milestone rediscovers
+  it. M2 and M13 both need it.
+- **`--stub-tasks N` belongs here**, because form-style configs are unusable
+  without it: the annotator is the data source, so the project needs N identical
+  `{"data": {"brief": "…"}}` stubs to have N submission slots.
+- **Idempotent by title**, per the house rules — re-running must report the
+  existing project's id, not create a second one with the same name.
+- Keep `requirements.txt` to what is actually imported (`requests`, and
+  `openpyxl` once M1 writes xlsx). A dependency added speculatively is one
+  nobody can later justify removing.
+
+**Done when:** one command creates a project from a file in `configs/` and
+prints its id; re-running the same command creates nothing and says which
+project it matched; and the flattener has a fixture test that runs without an
+instance.
+
 ## M1 — dual-annotation export (`automation/export_annotations.py`)
 
-**Why.** `export_to_intake_xlsx.py` flattens the **latest** non-cancelled
-annotation per task — correct for form-style intake, wrong for dual annotation,
-where the second judgment is the entire point (CUSTOMIZATION.md layer 2 already
-flags this). Without this exporter a verification study cannot get its data out
-of the platform at all.
+**Why.** The UI's own export, and any converter written for form-style intake,
+gives you the **latest** non-cancelled annotation per task — correct for
+benchmark submissions, wrong for dual annotation, where the second judgment is
+the entire point. Without this exporter a verification study cannot get its
+data out of the platform at all, which makes it the one milestone that blocks
+the study rather than merely slowing it.
 
-A scaffold with docstrings and `TODO`s is committed at
-`automation/export_annotations.py`; fill it in rather than starting over.
+Depends on M0 for the flattener and the HTTP plumbing.
 
 **Interface.**
 
@@ -136,8 +194,9 @@ acceptable first version — the manifest is what makes it reviewable.
   agreeing on up front.
 - **Import in chunks.** A single import body with thousands of tasks gets
   rejected; a few hundred per request is safe.
-- **Project listing is paginated** on some releases and a bare list on others.
-  Put that behind an `ls_api` helper once.
+- **Use M0's project lister** rather than calling the endpoint directly; it
+  already absorbs the difference between releases that paginate the response
+  and releases that return a bare list.
 - Account invites stay manual (**Organization → Add people**) — say so in the
   final summary line, so nobody assumes provisioning finished the job.
 
@@ -261,7 +320,7 @@ a restore has been performed at least once.
 
 A lab desktop that has silently stopped serving is indistinguishable from a
 working one until an annotator says so. A periodic check of the app's health
-endpoint plus the validator's `/healthz`, alerting somewhere a human reads
+endpoint — plus any service M15 adds later — alerting somewhere a human reads
 (email, chat webhook), turns a lost afternoon into a five-minute fix.
 
 *Done when:* stopping the app container produces an alert without anyone
@@ -280,10 +339,10 @@ invite links, over TLS or VPN.
 
 ### M11 — widen `annotation_fields()` with the configs
 
-`ls_api.annotation_fields()` understands TextArea, Choices and Number — the
-three families the committed configs use. The first config that adds Labels,
-Rating or Taxonomy will export silently empty columns unless the helper is
-extended first. Extend it in the same style, add a fixture test per family, and
+M0's flattener understands TextArea, Choices and Number — the three families
+the committed configs use. The first config that adds Labels, Rating or
+Taxonomy will export silently empty columns unless the helper is extended
+first. Extend it in the same style, add a fixture test per family, and
 keep it the single place that knows how a `result` item becomes a value; every
 converter downstream inherits the fix.
 
@@ -308,9 +367,8 @@ every push.
 
 ### M13 — idempotent import by data key
 
-`register_webhook.py` is idempotent, and M2 makes provisioning idempotent *by
-project title* — which protects the project but says nothing about what is
-inside it. Import the same batch twice and every item exists twice. That is not
+M0 and M2 make creation idempotent *by project title* — which protects the
+project but says nothing about what is inside it. Import the same batch twice and every item exists twice. That is not
 a cosmetic problem: a duplicated task splits one item in two, so the pair of
 independent judgments a study is counting becomes one annotator judging the same
 item twice. It corrupts agreement statistics without corrupting anything you can
@@ -333,9 +391,9 @@ provisioning and any later re-import inherit the same behaviour.
 - **Duplicates inside the incoming batch are an error too**, caught before the
   first task is created — validate everything before mutating anything.
 - **One paged sweep, compared in memory.** Per-task lookups turn a 2,000-item
-  import into 2,000 requests. Task listing is paginated, and the response shape
-  differs across releases in the same way project listing does, which is the
-  argument for putting it behind an `ls_api` helper once.
+  import into 2,000 requests. Task listing is paginated and varies across
+  releases exactly as project listing does, so it belongs beside M0's project
+  lister rather than inline here.
 - **Exact string comparison, no normalisation.** A study whose ids need
   normalising should normalise them when it writes the batch. A matcher that
   quietly folds case or trims punctuation is one nobody can predict.
@@ -353,15 +411,148 @@ task as skipped, a partly-overlapping second wave imports only the new items,
 and a batch with a missing or duplicated key fails before the first task is
 created.
 
+### M14 — the study-side repository the boundary depends on
+
+**Why.** The repository boundary is stated in three places (README
+§ "Repository boundary", CUSTOMIZATION.md § dual-annotation studies, and the
+standing non-goals below) and every milestone above defers something to "the
+study repo". No such repo has ever existed. That is not a documentation gap —
+it means **the boundary has never been exercised**, and the first real study
+will improvise assignment, blinding and agreement code under deadline. Whatever
+it improvises becomes the lab's de-facto standard.
+
+Four phases, and the first is worth doing before M1 rather than after.
+
+**Phase 1 — write the contract (a document, half a day).** The boundary is
+currently three scattered assertions. Turn it into one page that answers two
+questions: what lives on each side, and *what crosses*. Only two artefacts
+cross, which is the point worth making:
+
+| Direction | Artefact |
+|---|---|
+| platform → study | M1's export — one row per annotation |
+| study → platform | M2's manifest, a labeling config, batch files |
+
+**Phase 2 — version the export schema (small, after M1).** The platform side of
+the seam is that export, and today its column set is whatever the code happens
+to emit. A study's statistics bind to those columns; then M6 adds `--emails` or
+M11 widens the flattener, the columns shift, and the study's numbers are wrong
+without anything failing. Declare the schema, give it a version, and have the
+exporter stamp the version into the file it writes. M12 is where it gets locked
+by a test.
+
+**Phase 3 — the study template (the actually missing artefact).** A separate
+repository, four directories, nothing clever:
+
+- `batches/` — the seeded script that decides who judges what (stratification,
+  pair rotation), writing one task file per annotator
+- `blinding/` — the item-id-keyed map of everything the annotator must not see,
+  joined back only at analysis time and **never** present in a task file
+- `analysis/` — agreement, adjudication rates, timing, computed from the
+  platform export
+- `projects.json` + a README naming the commands in order
+
+**Phase 4 — run the seam end to end (fold into M5).** M5 is currently a
+platform-side dry run. Extend it across the boundary: the study repo generates
+batches → M2 provisions → two people label → M1 exports → the study repo
+produces an agreement number. Until that has happened once, the boundary is a
+claim.
+
+**Decisions worth getting right.**
+
+- **The template is a repository you copy, not a generator.** A study repo is
+  created once in its life; a cookiecutter would be a second thing to maintain
+  for no recurring benefit.
+- **The study repo must not import platform code.** This is the only rule here
+  that will actually be broken, and it will be broken for a good reason — some
+  helper in `ls_api.py` does exactly what the analysis script needs. The moment
+  it does, the study stops being reproducible from its own repo, which is the
+  entire purpose of the split. The study consumes *exported files*, nothing
+  else. Worth a one-line CI grep in the template.
+- **Do not fork this repository to create a study repo.** A fork arrives with
+  `automation/` already in it, and the rule above dies on day one — not by
+  anyone's decision, just by proximity.
+- **Provisioning is generic, assignment is not.** M2 reads a manifest and
+  creates projects; *deciding what goes in each batch* is the study's. M2 is
+  already scoped this way — phase 1 writes it down so it stays that way.
+- **The platform emits numeric ids, always.** Pseudonymisation
+  (`annotator_1`) is a study-side mapping (M6).
+
+**Done when:** a new study can be started from the template's README alone —
+generate batches, provision, label, export, produce an agreement number — with
+no change to this repository, and with no line in the study repo importing from
+it.
+
+### M15 — a validation webhook, if a task type earns one
+
+**Why.** Label Studio can POST every submission to a service as it is saved,
+which is the only way to give an annotator feedback *at save time* rather than
+at analysis time. A FastAPI service under `services/`, wired into the compose
+stack and registered per project on `ANNOTATION_CREATED` / `ANNOTATION_UPDATED`.
+
+The honest case for deferring it: **layer 1 already prevents most of what it
+would catch.** With `required="true"` and enum `<Choices>` on every field, a
+submission made through the UI cannot carry an empty required field or an
+invalid enum. A validator's remaining value is real but narrow — catching what
+arrives through the API bypassing the form, and cross-field rules a config
+cannot express (this field must be empty *unless* that one is set).
+
+Traps, from a prototype that worked:
+
+- **Label Studio rejects bare single-label hostnames in webhook URLs.** A
+  container reachable as `validator` will not register; Django's URL validation
+  refuses it. Give it a dotted compose alias — `validator.internal` — and
+  register that. This costs an afternoon to rediscover.
+- **Expect the log to read `clean` almost always.** That is layer 1 working, not
+  the webhook failing. Anyone judging the service by how much it catches will
+  conclude wrongly that it is broken.
+- **Shallow rules only.** Deep validation belongs downstream; a second copy of
+  it in the webhook is the copy that drifts.
+
+**Done when:** a deliberately malformed submission POSTed through the API
+produces a logged issue list naming every violated rule, and a normal UI
+submission produces one clean line.
+
+### M16 — benchmark intake converter
+
+**Why.** `configs/benchmark-task.xml` exists to replace an xlsx intake form,
+and its field names are the intake sheet's column names 1:1 — so the converter
+is a pass-through with no renaming, and today that pass-through is done by hand
+in a spreadsheet after a UI export. One command, one project id, one file:
+
+```bash
+python automation/export_to_intake_xlsx.py --project <id> -o submissions.xlsx
+```
+
+Form-style intake is the one place **latest-wins is correct** — one submission
+fills one stub, and a re-opened task should contribute its final state, not
+both. That is the opposite of M1's rule, and the two exporters must not share
+that logic however similar they look. Skip tasks with no annotation and report
+the count.
+
+**Done when:** one command turns a benchmark project into a sheet the intake
+pipeline accepts unedited.
+
 ## Ordering
 
-M1 and M3 are independent and can start any time. M2 must precede the first
-study's import; M4 precedes its kickoff session; M5 gates production labeling.
-After that: M8 and M9 before the instance carries anyone else's work, M10 as
-soon as an annotator is off-network, M6/M7 when the first study reaches
-analysis, M11 when a new task type needs it, M13 as soon as a study imports in
-waves rather than in one batch, M12 whenever you want the earlier milestones to
-stay correct.
+**M0 comes first and blocks M1, M2, M3 and M13** — all four assume its
+plumbing. Two things need no code and can run alongside it from day one: M4
+(deployment work) and M14 phase 1 (the boundary contract), and the latter is
+worth finishing before M1 fixes an export layout by accident.
+
+Then M1 and M3 are independent of each other; M2 must precede the first study's
+import; M4 precedes its kickoff session; M5 gates production labeling and is
+also where M14 phase 4 exercises the boundary for the first time.
+
+After the first study: M8 and M9 before the instance carries anyone else's
+work, M10 as soon as an annotator is off-network, M6/M7 when the first study
+reaches analysis, M11 when a new task type needs it, M13 as soon as a study
+imports in waves rather than in one batch, M12 whenever you want the earlier
+milestones to stay correct.
+
+M15 and M16 are genuine but unblocking — M16 when hand-shaping the intake sheet
+starts to grate, M15 only if a task type turns out to need a rule its labeling
+config cannot express.
 
 ## Non-goals (standing)
 
